@@ -28,7 +28,6 @@ const defaultHeaders: Record<string, string> = {
 };
 
 // ─── ScraperAPI usage counter ─────────────────────────────────────────────────
-
 // Per-instance counter — reset saat cold start, tapi cukup untuk deteksi lonjakan
 let scraperApiCallCount = 0;
 
@@ -52,7 +51,6 @@ function trackScraperApiCall() {
 }
 
 // ─── Fetch strategies ─────────────────────────────────────────────────────────
-
 function getDirectUrl(path: string) {
   return `${BASE_URL.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
 }
@@ -164,13 +162,13 @@ async function rawFetch(path: string): Promise<Response> {
   return response;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
+// ─── Fetch API ───────────────────────────────────────────────────────────────
 export async function fetchAPI(path: string) {
   const response = await rawFetch(path);
   return response.json();
 }
 
+// unused function
 export async function fetchPage(path: string) {
   const response = await rawFetch(path);
   const html = await response.text();
