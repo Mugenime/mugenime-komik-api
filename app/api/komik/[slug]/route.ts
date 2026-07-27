@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
-import { ok, err } from "@/utils/response";
+import { err, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeDetailKomik } from "@/libs/scrapeDetailKomik";
+import { runWithLogs } from "@/libs/scraper";
 
 export async function GET(
   req: NextRequest,
@@ -9,12 +10,13 @@ export async function GET(
 ) {
   try {
     const { slug } = await params;
-    // const data = await scrapeDetailKomik(slug);
-    const data = await withCache(`komik:${slug}`, CACHE_TTL.MEDIUM, () =>
-      scrapeDetailKomik(slug),
+    const { data, logs } = await runWithLogs(() =>
+      withCache(`komik:${slug}`, CACHE_TTL.MEDIUM, () =>
+        scrapeDetailKomik(slug),
+      ),
     );
 
-    return ok(data, {
+    return okWithLogs(data, logs, {
       headers: { "Cache-Control": cacheHeader(CACHE_TTL.MEDIUM) },
     });
   } catch (e: any) {

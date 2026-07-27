@@ -1,16 +1,16 @@
 import { NextRequest } from "next/server";
-import { ok, err } from "@/utils/response";
+import { err, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeGenres } from "@/libs/scrapeGenres";
+import { runWithLogs } from "@/libs/scraper";
 
 export async function GET(req: NextRequest) {
   try {
-    // const data = await scrapeGenres();
-    const data = await withCache("genres", CACHE_TTL.STATIC, () =>
-      scrapeGenres(),
+    const { data, logs } = await runWithLogs(() =>
+      withCache("genres", CACHE_TTL.STATIC, () => scrapeGenres()),
     );
 
-    return ok(data, {
+    return okWithLogs(data, logs, {
       // Genres rarely change, can be cached longer
       headers: { "Cache-Control": cacheHeader(CACHE_TTL.STATIC) },
     });
