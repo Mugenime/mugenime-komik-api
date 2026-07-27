@@ -2,14 +2,29 @@ import { fetchAPI } from "@/libs/scraper";
 import { 
   ReadChapterContent,
   KomikcastChapterContentResponse,
-  KomikcastDetailResponse,
   KomikcastReadChapterResponse
 } from "@/types/manga";
 
+/**
+ * Format slug menjadi judul yang readable.
+ * Contoh: "on-the-way-to-see-mom" → "On The Way To See Mom"
+ * Dipakai sebagai fallback bila komikTitle tidak tersedia dari cache.
+ */
+function slugToTitle(slug: string): string {
+  return slug
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 export async function scrapeReadChapter(slug: string, chapterId: string, baseUrl: string) {
-  const [contentRes, detailRes, chapListRes] = await Promise.all([
+  // ✅ FIX: Hanya 2 fetch, bukan 3.
+  // Detail komik (/series/${slug}?includeMeta=true) DIHAPUS dari sini karena:
+  //   1. Data itu sudah tersedia di endpoint /api/komik/[slug] yang harus dipanggil lebih dulu.
+  //   2. Memanggil detail komik di setiap chapter request = over-fetching besar-besaran
+  //      (bayangkan 30 chapter × 1 extra proxy call = 30 request sia-sia per halaman baca).
+  const [contentRes, chapListRes] = await Promise.all([
     fetchAPI(`/series/${slug}/chapters/${chapterId}`) as Promise<KomikcastChapterContentResponse>,
-    fetchAPI(`/series/${slug}?includeMeta=true`) as Promise<KomikcastDetailResponse>,
     fetchAPI(`/series/${slug}/chapters`) as Promise<KomikcastReadChapterResponse>
   ]);
 
@@ -18,7 +33,6 @@ export async function scrapeReadChapter(slug: string, chapterId: string, baseUrl
     throw new Error("Chapter not found");
   }
 
-  const komikData = detailRes.data;
   const chapters = chapListRes.data || [];
 
   const sortedChapters = [...chapters].sort((a, b) => a.data.index - b.data.index);
@@ -48,8 +62,10 @@ export async function scrapeReadChapter(slug: string, chapterId: string, baseUrl
   const result: ReadChapterContent = {
     id: chapterData.id,
     chapterIndex: chapterData.chapterIndex,
-    komikTitle: komikData?.data?.title || "",
-    komikSlug: komikData?.data?.slug || slug,
+    // komikTitle didapatkan dari slug (sudah cukup untuk navigasi).
+    // Bila consumer butuh judul asli, gunakan data dari GET /api/komik/[slug] yang di-cache.
+    komikTitle: slugToTitle(slug),
+    komikSlug: slug,
     images: (chapterData.data.images || []).map(
       (img) => `${baseUrl}/api/proxy?url=${encodeURIComponent(img)}`
     ),

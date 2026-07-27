@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { scrapePopular } from "@/libs/scrapePopular";
-import { ok, err } from "@/utils/response";
+import { err, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
+import { runWithLogs } from "@/libs/scraper";
 
 export async function GET(req: NextRequest) {
   try {
@@ -17,14 +18,15 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // const data = await scrapePopular(category, take, page);
-    const data = await withCache(
-      `popular:${category}:${take}:${page}`,
-      CACHE_TTL.SHORT,
-      () => scrapePopular(category, take, page),
+    const { data, logs } = await runWithLogs(() =>
+      withCache(
+        `popular:${category}:${take}:${page}`,
+        CACHE_TTL.SHORT,
+        () => scrapePopular(category, take, page),
+      ),
     );
 
-    return ok(data, {
+    return okWithLogs(data, logs, {
       headers: { "Cache-Control": cacheHeader(CACHE_TTL.SHORT) },
     });
   } catch (e: any) {

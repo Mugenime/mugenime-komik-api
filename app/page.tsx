@@ -191,7 +191,7 @@ export default function Home() {
           {/* Author Credits */}
           <div className="flex items-center gap-3">
             <span className="text-sm text-zinc-500 font-medium">
-              Powered by
+              Created by
             </span>
             <a
               href="https://github.com/Wakype"

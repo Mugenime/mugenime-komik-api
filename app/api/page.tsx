@@ -10,6 +10,16 @@ import {
 } from "@/components/CollapsibleTemplate";
 import { ApiOverview } from "@/components/ApiOverview";
 
+type LogEntry = {
+  level: "info" | "warn" | "error";
+  strategy: string;
+  status: string;
+  elapsed: number | null;
+  path: string;
+  extra?: string;
+  ts: number;
+};
+
 const endpoints = [
   {
     id: "home",
@@ -138,6 +148,7 @@ export default function ApiDocs() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [genresOptions, setGenresOptions] = useState<string[]>([]);
+  const [scraperLogs, setScraperLogs] = useState<LogEntry[]>([]);
 
   const [copiedResponse, setCopiedResponse] = useState(false);
   const [copiedTemplate, setCopiedTemplate] = useState(false);
@@ -240,6 +251,7 @@ export default function ApiDocs() {
     setIsLoading(true);
     setError(null);
     setResponse(null);
+    setScraperLogs([]);
 
     for (const param of activeEndpoint!.params) {
       if (
@@ -261,6 +273,23 @@ export default function ApiDocs() {
 
     try {
       const res = await fetch(getFullUrl());
+      // Parse scraper logs from response header
+      const logsHeader =
+        res.headers.get("X-Scraper-Logs") || res.headers.get("x-scraper-logs");
+      if (logsHeader) {
+        try {
+          const bytes = Uint8Array.from(atob(logsHeader), (c) =>
+            c.charCodeAt(0),
+          );
+          const decoded = new TextDecoder("utf-8").decode(bytes);
+          const parsed = JSON.parse(decoded);
+          if (Array.isArray(parsed)) {
+            setScraperLogs(parsed);
+          }
+        } catch (e) {
+          console.error("Error parsing X-Scraper-Logs header", e);
+        }
+      }
       const data = await res.json();
       setResponse(data);
     } catch (err: any) {
@@ -650,6 +679,198 @@ export default function ApiDocs() {
                     </div>
                   </div>
                 )}
+
+                {/* Scraper Log Panel — always visible */}
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 overflow-hidden">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-zinc-900/80 border-b border-zinc-800">
+                      <div className="flex items-center gap-2">
+                        <span className="relative flex h-2 w-2">
+                          {isLoading ? (
+                            <>
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                            </>
+                          ) : (
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-zinc-600" />
+                          )}
+                        </span>
+                        <span className="text-xs font-mono font-semibold text-zinc-300">scraper.log</span>
+                        {scraperLogs.length > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-zinc-800 text-zinc-500 font-mono">
+                            {scraperLogs.length} events
+                          </span>
+                        )}
+                      </div>
+                      {scraperLogs.length > 0 && (
+                        <button
+                          onClick={() => setScraperLogs([])}
+                          className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors font-medium"
+                        >
+                          clear
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Log Lines */}
+                    <div className="font-mono text-xs divide-y divide-zinc-900">
+                      {/* Empty / loading state */}
+                      {!isLoading && scraperLogs.length === 0 && (
+                        <div className="flex flex-col items-center justify-center gap-2 px-4 py-8 text-zinc-700">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <path d="M3 9h18M9 21V9" />
+                          </svg>
+                          <span className="text-[11px]">Belum ada log — tekan <span className="text-zinc-500 font-semibold">Send Request</span> untuk melihat aktivitas scraper</span>
+                        </div>
+                      )}
+
+                      {isLoading && scraperLogs.length === 0 && (
+                        <div className="flex items-center gap-3 px-4 py-3 text-zinc-600">
+                          <svg className="animate-spin h-3 w-3 text-zinc-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          <span>Waiting for response...</span>
+                        </div>
+                      )}
+
+                      {scraperLogs.map((log, i) => {
+                        const isDone = log.strategy === "DONE";
+                        const isFailed = log.strategy === "FAILED";
+                        const isDedup = log.strategy === "DEDUP";
+                        const isCache = log.strategy === "CACHE";
+                        const isWarn = log.level === "warn";
+
+                        const strategyBadge = (() => {
+                          if (isCache)
+                            return {
+                              bg: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+                              label: "CACHE",
+                              dot: "bg-cyan-400",
+                            };
+                          if (isDone)
+                            return {
+                              bg: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 font-bold",
+                              label: "DONE",
+                              dot: "bg-emerald-400",
+                            };
+                          if (isFailed)
+                            return {
+                              bg: "bg-red-500/15 text-red-400 border-red-500/30 font-bold",
+                              label: "FAILED",
+                              dot: "bg-red-400",
+                            };
+                          if (isDedup)
+                            return {
+                              bg: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+                              label: "DEDUP",
+                              dot: "bg-amber-400",
+                            };
+                          if (log.strategy === "ScraperAPI")
+                            return {
+                              bg: "bg-purple-500/10 text-purple-400 border-purple-500/20",
+                              label: "ScraperAPI",
+                              dot: "bg-purple-400",
+                            };
+                          if (log.strategy === "Proxy")
+                            return {
+                              bg: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+                              label: "Proxy",
+                              dot: "bg-blue-400",
+                            };
+                          if (log.strategy === "Direct")
+                            return {
+                              bg: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+                              label: "Direct",
+                              dot: "bg-emerald-400",
+                            };
+                          return {
+                            bg: "bg-zinc-800 text-zinc-400 border-zinc-700",
+                            label: log.strategy,
+                            dot: "bg-zinc-500",
+                          };
+                        })();
+
+                        const statusStyle = (() => {
+                          if (isFailed || isWarn)
+                            return "bg-red-500/10 text-red-400 border-red-500/20";
+                          if (isDone)
+                            return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+                          if (log.status === "HIT")
+                            return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20 font-semibold";
+                          if (log.status === "MISS")
+                            return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+                          if (log.status === "STALE")
+                            return "bg-orange-500/10 text-orange-400 border-orange-500/20";
+                          if (log.status === "SHARED")
+                            return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+                          if (log.status.startsWith("OK"))
+                            return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+                          if (log.status === "START")
+                            return "bg-zinc-800/80 text-zinc-400 border-zinc-700/50";
+                          return "bg-zinc-800 text-zinc-400 border-zinc-700";
+                        })();
+
+                        return (
+                          <div
+                            key={i}
+                            className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-4 py-2.5 transition-colors ${
+                              isFailed
+                                ? "bg-red-500/[0.03] hover:bg-red-500/[0.06]"
+                                : isDone
+                                  ? "bg-emerald-500/[0.03] hover:bg-emerald-500/[0.06]"
+                                  : "hover:bg-zinc-900/50"
+                            }`}
+                          >
+                            {/* Strategy badge */}
+                            <div className="flex items-center gap-2 shrink-0 w-28">
+                              <span
+                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[10px] font-mono tracking-wide ${strategyBadge.bg}`}
+                              >
+                                <span
+                                  className={`h-1.5 w-1.5 rounded-full ${strategyBadge.dot}`}
+                                />
+                                {strategyBadge.label}
+                              </span>
+                            </div>
+
+                            {/* Status badge */}
+                            <div className="shrink-0 w-20">
+                              <span
+                                className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono border text-center ${statusStyle}`}
+                              >
+                                {log.status}
+                              </span>
+                            </div>
+
+                            {/* Elapsed ms */}
+                            <div className="shrink-0 w-16 text-right font-mono text-[11px] text-zinc-500">
+                              {log.elapsed !== null ? `+${log.elapsed}ms` : ""}
+                            </div>
+
+                            {/* Path + Extra detail */}
+                            <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="font-mono text-xs text-zinc-300 break-all">
+                                {log.path}
+                              </span>
+                              {log.extra && (
+                                <span
+                                  className={`text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-900 border ${
+                                    isWarn || isFailed
+                                      ? "border-red-500/30 text-red-400"
+                                      : "border-zinc-800 text-zinc-400"
+                                  }`}
+                                >
+                                  {log.extra}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
 
                 {/* Actions */}
                 <div className="pt-2 flex flex-col md:flex-row items-center gap-4">

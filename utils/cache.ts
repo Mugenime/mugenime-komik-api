@@ -1,3 +1,5 @@
+import { pushLog } from "@/libs/scraper";
+
 export const CACHE_TTL = {
   /** 10 min */
   SHORT: 10 * 60,
@@ -45,12 +47,30 @@ export async function withCache<T>(
     if (cached.expiresAt > now) {
       // FRESH — return langsung
       console.log(`[cache] HIT   ${key}`);
+      pushLog({
+        level: "info",
+        strategy: "CACHE",
+        status: "HIT",
+        elapsed: 0,
+        path: key,
+        extra: `In-memory cache (fresh, TTL: ${ttlSeconds}s)`,
+        ts: Date.now(),
+      });
       return cached.data;
     }
 
     if (cached.staleUntil > now) {
       // STALE — return stale data dulu, refresh di background
       console.log(`[cache] STALE ${key}`);
+      pushLog({
+        level: "info",
+        strategy: "CACHE",
+        status: "STALE",
+        elapsed: 0,
+        path: key,
+        extra: `Stale cache served, background revalidating`,
+        ts: Date.now(),
+      });
 
       if (!revalidating.has(key)) {
         revalidating.add(key);
@@ -79,6 +99,15 @@ export async function withCache<T>(
 
   // MISS — fetch dan tunggu
   console.log(`[cache] MISS  ${key}`);
+  pushLog({
+    level: "info",
+    strategy: "CACHE",
+    status: "MISS",
+    elapsed: 0,
+    path: key,
+    extra: `Cache miss, fetching from source...`,
+    ts: Date.now(),
+  });
   const data = await fetcher();
 
   memoryCache.set(key, {

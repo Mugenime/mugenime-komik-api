@@ -1,19 +1,19 @@
 import { NextRequest } from "next/server";
-import { ok, err } from "@/utils/response";
+import { err, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeLatest } from "@/libs/scrapeLatest";
+import { runWithLogs } from "@/libs/scraper";
 
 export async function GET(req: NextRequest) {
   try {
     const searchParams = req.nextUrl.searchParams;
     const page = Number.parseInt(searchParams.get("page") || "1", 10) || 1;
 
-    // const data = await scrapeLatest(page);
-    const data = await withCache(`latest:${page}`, CACHE_TTL.SHORT, () =>
-      scrapeLatest(page),
+    const { data, logs } = await runWithLogs(() =>
+      withCache(`latest:${page}`, CACHE_TTL.SHORT, () => scrapeLatest(page)),
     );
 
-    return ok(data, {
+    return okWithLogs(data, logs, {
       headers: { "Cache-Control": cacheHeader(CACHE_TTL.SHORT) },
     });
   } catch (e: any) {
