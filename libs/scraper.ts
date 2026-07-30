@@ -1,49 +1,39 @@
 import * as cheerio from "cheerio";
-import { AsyncLocalStorage } from "node:async_hooks";
+import { fetch as undiciFetch, ProxyAgent } from "undici";
+import {
+  shortUrl,
+  logStart,
+  logInfo,
+  logWarn,
+  logDone,
+  logError,
+  pushLog,
+  trackScraperApiCall,
+} from "./scraperLog";
 
-// ─── Per-request log store (AsyncLocalStorage) ────────────────────────────────
-export type LogEntry = {
-  level: "info" | "warn" | "error";
-  strategy: string; // e.g. "ScraperAPI", "Proxy", "Direct", "DEDUP", "DONE", "FAILED"
-  status: string; // e.g. "START", "OK 200", "FAIL", "SHARED"
-  elapsed: number | null;
-  path: string;
-  extra?: string;
-  ts: number; // Date.now() saat log dibuat
-};
+export type { LogEntry } from "./scraperLog";
+export { pushLog, getRequestLogs, runWithLogs } from "./scraperLog";
 
-const logStorage = new AsyncLocalStorage<LogEntry[]>();
-
-export function pushLog(entry: LogEntry) {
-  logStorage.getStore()?.push(entry);
-}
-
-/** Ambil semua log yang dikumpulkan dalam request saat ini. */
-export function getRequestLogs(): LogEntry[] {
-  return logStorage.getStore() ?? [];
-}
-
-/**
- * Jalankan `fn` dalam konteks log baru (1 per request).
- * Mengembalikan { data, logs } — logs diambil sebelum store ditutup.
- */
-export async function runWithLogs<T>(fn: () => Promise<T>): Promise<{ data: T; logs: LogEntry[] }> {
-  const store: LogEntry[] = [];
-  const data = await logStorage.run(store, fn);
-  // Ambil salinan logs SEBELUM context ditutup
-  return { data, logs: [...store] };
-}
-
+// ─── Environment Configuration ────────────────────────────────────────────────
 const BASE_URL = process.env.MANGA_BASE_URL!;
 const BYPASS_SECRET = process.env.BYPASS_SECRET;
 const SCRAPER_API_KEY = process.env.SCRAPER_API_KEY;
 
-const PROXY_URLS: string[] = [
-  process.env.SCRAPER_PROXY_URL,
-  process.env.SCRAPER_PROXY_URL_2,
-  process.env.SCRAPER_PROXY_URL_3,
-  process.env.SCRAPER_PROXY_URL_4,
-].filter((url): url is string => typeof url === "string" && url.length > 0);
+/** URL Custom Proxy (Cloudflare Workers / Deno / Netlify) */
+const PROXY_URLS: string[] = Object.keys(process.env)
+  .filter((key) => key.startsWith("SCRAPER_PROXY_URL"))
+  .map((key) => process.env[key])
+  .filter(
+    (url): url is string => typeof url === "string" && url.trim().length > 0,
+  );
+
+/** URL Webshare HTTP Proxy (http://username:password@ip:port) */
+const WEBSHARE_PROXIES: string[] = Object.keys(process.env)
+  .filter((key) => key.startsWith("WEBSHARE_PROXY"))
+  .map((key) => process.env[key])
+  .filter(
+    (url): url is string => typeof url === "string" && url.trim().length > 0,
+  );
 
 const defaultHeaders: Record<string, string> = {
   "User-Agent":
@@ -55,41 +45,32 @@ const defaultHeaders: Record<string, string> = {
     '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
   "Sec-Ch-Ua-Mobile": "?0",
   "Sec-Ch-Ua-Platform": '"Windows"',
-  "Sec-Fetch-Dest": "empty",
-  "Sec-Fetch-Mode": "cors",
-  "Sec-Fetch-Site": "same-origin",
   Referer: BASE_URL,
   Origin: BASE_URL.replace(/\/$/, ""),
 };
 
-// ─── ScraperAPI usage counter ─────────────────────────────────────────────────
-// Per-instance counter — reset saat cold start, tapi cukup untuk deteksi lonjakan
-let scraperApiCallCount = 0;
+// ─── SCRAPING QUEUE ────────────────────────────────────────
+export type ScraperStrategyName =
+  | "WebshareProxy"
+  | "CustomProxy"
+  | "ScraperAPI"
+  | "DirectFetch";
 
-const SCRAPER_API_QUOTA = 5_000;
-const SCRAPER_API_WARN_AT = 4_000; // warn di 80%
+export const SCRAPER_STRATEGY_QUEUE: ScraperStrategyName[] = [
+  "WebshareProxy",
+  "CustomProxy",
+  "ScraperAPI",
+  "DirectFetch",
+];
 
-function trackScraperApiCall() {
-  scraperApiCallCount++;
-
-  if (scraperApiCallCount === SCRAPER_API_WARN_AT) {
-    console.warn(
-      `[scraper] ⚠️  ScraperAPI calls this instance hit ${scraperApiCallCount} — mendekati quota ${SCRAPER_API_QUOTA}/bulan. Pantau dashboard ScraperAPI.`,
-    );
-  }
-
-  if (scraperApiCallCount % 500 === 0) {
-    console.log(
-      `[scraper] ScraperAPI calls this instance: ${scraperApiCallCount}`,
-    );
-  }
-}
-
-// ─── Fetch strategies ─────────────────────────────────────────────────────────
+// ─── Helper Functions ─────────────────────────────────────────────────────────
 function getDirectUrl(path: string) {
   return `${BASE_URL.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
 }
 
+// ─── Low-Level Fetchers ───────────────────────────────────────────────────────
+
+/** ScraperAPI fetcher */
 async function fetchViaScraperAPI(directUrl: string): Promise<Response> {
   const params = new URLSearchParams({
     api_key: SCRAPER_API_KEY!,
@@ -122,7 +103,8 @@ async function fetchViaScraperAPI(directUrl: string): Promise<Response> {
   return response;
 }
 
-async function fetchViaProxy(
+/** Custom Proxy fetcher (Cloudflare / Deno / Netlify) */
+async function fetchViaCustomProxy(
   proxyUrl: string,
   directUrl: string,
 ): Promise<Response> {
@@ -147,86 +129,161 @@ async function fetchViaProxy(
   return response;
 }
 
-// ─── In-flight deduplication ──────────────────────────────────────────────────
+/** Webshare HTTP Proxy fetcher (undici ProxyAgent) */
+async function fetchViaWebshareProxy(
+  proxyUrl: string,
+  directUrl: string,
+): Promise<Response> {
+  const agent = new ProxyAgent(proxyUrl);
+
+  const response = await undiciFetch(directUrl, {
+    method: "GET",
+    headers: defaultHeaders,
+    dispatcher: agent,
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Webshare Proxy failed with status ${response.status} for ${directUrl}`,
+    );
+  }
+
+  return response as unknown as Response;
+}
+
+// ─── Strategy Runner Functions ────────────────────────────────────────────────
 type FetchResult = { text: string; strategy: string; via?: string };
-const inFlightRequests = new Map<string, Promise<FetchResult>>();
 
-// ─── Logger helper ────────────────────────────────────────────────────────────
-type Strategy = "ScraperAPI" | "Proxy" | "Direct" | "DEDUP";
+async function runScraperAPI(directUrl: string): Promise<FetchResult | null> {
+  if (!SCRAPER_API_KEY) return null;
 
-const BADGE: Record<Strategy, string> = {
-  ScraperAPI: "🟣 ScraperAPI",
-  Proxy: "🔵 Proxy     ",
-  Direct: "🟢 Direct    ",
-  DEDUP: "🟡 DEDUP     ",
-};
-
-/** Ambil path + query dari URL penuh, potong jika terlalu panjang. */
-function shortUrl(url: string): string {
+  const tS = Date.now();
+  logStart("ScraperAPI", directUrl);
   try {
-    const { pathname, search } = new URL(url);
-    const full = pathname + search;
-    return full.length > 80 ? full.slice(0, 77) + "…" : full;
-  } catch {
-    return url.length > 80 ? url.slice(0, 77) + "…" : url;
+    const response = await fetchViaScraperAPI(directUrl);
+    logInfo("ScraperAPI", `OK ${response.status}`, Date.now() - tS, directUrl);
+    return { text: await response.text(), strategy: "ScraperAPI" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logWarn("ScraperAPI", Date.now() - tS, directUrl, `${msg} -> fallback`);
+    return null;
   }
 }
 
-function logInfo(
-  strategy: Strategy,
-  status: string,
-  elapsed: number,
-  url: string,
-  extra = "",
-) {
-  const ms = `+${elapsed}ms`.padStart(8);
-  const extra_ = extra ? ` │ ${extra}` : "";
-  console.log(
-    `[scraper] ${BADGE[strategy]} │ ${status.padEnd(6)} │ ${ms} │ ${shortUrl(url)}${extra_}`,
-  );
-  pushLog({
-    level: "info",
-    strategy,
-    status,
-    elapsed,
-    path: shortUrl(url),
-    extra: extra || undefined,
-    ts: Date.now(),
-  });
+async function runWebshareProxy(
+  directUrl: string,
+): Promise<FetchResult | null> {
+  if (WEBSHARE_PROXIES.length === 0) return null;
+
+  const shuffled = [...WEBSHARE_PROXIES].sort(() => Math.random() - 0.5);
+  for (const proxyUrl of shuffled) {
+    const tS = Date.now();
+    const proxyLabel = (() => {
+      try {
+        return new URL(proxyUrl).hostname;
+      } catch {
+        return "Webshare";
+      }
+    })();
+    logStart("Proxy", directUrl, `Webshare (${proxyLabel})`);
+    try {
+      const response = await fetchViaWebshareProxy(proxyUrl, directUrl);
+      logInfo(
+        "Proxy",
+        `OK ${response.status}`,
+        Date.now() - tS,
+        directUrl,
+        `via Webshare (${proxyLabel})`,
+      );
+      return {
+        text: await response.text(),
+        strategy: "Proxy",
+        via: `Webshare (${proxyLabel})`,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logWarn(
+        "Proxy",
+        Date.now() - tS,
+        directUrl,
+        `via Webshare (${proxyLabel}): ${msg}`,
+      );
+    }
+  }
+  return null;
 }
 
-function logWarn(
-  strategy: Strategy,
-  elapsed: number,
-  url: string,
-  reason: string,
-) {
-  const ms = `+${elapsed}ms`.padStart(8);
+async function runCustomProxy(directUrl: string): Promise<FetchResult | null> {
+  if (PROXY_URLS.length === 0) return null;
+
+  const shuffled = [...PROXY_URLS].sort(() => Math.random() - 0.5);
+  for (const proxyUrl of shuffled) {
+    const via = (() => {
+      try {
+        return new URL(proxyUrl).hostname;
+      } catch {
+        return proxyUrl;
+      }
+    })();
+    const tS = Date.now();
+    logStart("Proxy", directUrl, via);
+    try {
+      const response = await fetchViaCustomProxy(proxyUrl, directUrl);
+      logInfo(
+        "Proxy",
+        `OK ${response.status}`,
+        Date.now() - tS,
+        directUrl,
+        `via ${via}`,
+      );
+      return { text: await response.text(), strategy: "Proxy", via };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logWarn("Proxy", Date.now() - tS, directUrl, `via ${via}: ${msg}`);
+    }
+  }
+
   console.warn(
-    `[scraper] ${BADGE[strategy]} │ FAIL   │ ${ms} │ ${shortUrl(url)} → ${reason}`,
+    `[scraper] ⚠️ Semua proxy custom (${shuffled.length}) gagal untuk ${shortUrl(directUrl)}.`,
   );
-  pushLog({
-    level: "warn",
-    strategy,
-    status: "FAIL",
-    elapsed,
-    path: shortUrl(url),
-    extra: reason,
-    ts: Date.now(),
-  });
+  return null;
 }
+
+async function runDirectFetch(directUrl: string): Promise<FetchResult | null> {
+  const tS = Date.now();
+  logStart("Direct", directUrl);
+  try {
+    const response = await fetch(directUrl, {
+      method: "GET",
+      headers: defaultHeaders,
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      logWarn("Direct", Date.now() - tS, directUrl, `HTTP ${response.status}`);
+      return null;
+    }
+
+    logInfo("Direct", `OK ${response.status}`, Date.now() - tS, directUrl);
+    return { text: await response.text(), strategy: "Direct" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logWarn("Direct", Date.now() - tS, directUrl, msg);
+    return null;
+  }
+}
+
+// ─── In-Flight Request Deduplication & Main Pipeline ──────────────────────────
+const inFlightRequests = new Map<string, Promise<FetchResult>>();
 
 async function rawFetch(path: string): Promise<Response> {
   const directUrl = getDirectUrl(path);
   const t0 = Date.now();
 
-  // ── DEDUP: URL yang sama sedang in-flight, share hasilnya ─────────────────
+  // ── DEDUP: request URL yang sama sedang berjalan, share hasilnya ─────────────
   if (inFlightRequests.has(directUrl)) {
     const result = await inFlightRequests.get(directUrl)!;
     const elapsed = Date.now() - t0;
-    console.log(
-      `[scraper] ${BADGE["DEDUP"]} │ SHARED │ ${`+${elapsed}ms`.padStart(8)} │ ${shortUrl(directUrl)} (winner: ${result.strategy})`,
-    );
     pushLog({
       level: "info",
       strategy: "DEDUP",
@@ -242,97 +299,33 @@ async function rawFetch(path: string): Promise<Response> {
     });
   }
 
-  // ── FETCH: jalankan semua strategy, return FetchResult ────────────────────
   const fetchPromise = (async (): Promise<FetchResult> => {
-    let response: Response;
+    for (const strategyName of SCRAPER_STRATEGY_QUEUE) {
+      let result: FetchResult | null = null;
 
-    // ── Strategy 1: ScraperAPI ──────────────────────────────────────────────
-    if (SCRAPER_API_KEY) {
-      const tS = Date.now();
-      console.log(
-        `[scraper] ${BADGE["ScraperAPI"]} │ START  │          │ ${shortUrl(directUrl)}`,
-      );
-      try {
-        response = await fetchViaScraperAPI(directUrl);
-        logInfo(
-          "ScraperAPI",
-          `OK ${response.status}`,
-          Date.now() - tS,
-          directUrl,
-        );
-        return { text: await response.text(), strategy: "ScraperAPI" };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logWarn(
-          "ScraperAPI",
-          Date.now() - tS,
-          directUrl,
-          `${msg} -> fallback ke Proxy`,
-        );
+      switch (strategyName) {
+        case "WebshareProxy":
+          result = await runWebshareProxy(directUrl);
+          break;
+        case "CustomProxy":
+          result = await runCustomProxy(directUrl);
+          break;
+        case "ScraperAPI":
+          result = await runScraperAPI(directUrl);
+          break;
+        case "DirectFetch":
+          result = await runDirectFetch(directUrl);
+          break;
+      }
+
+      if (result) {
+        return result;
       }
     }
 
-    // ── Strategy 2: Proxy (dicoba satu per satu, urutan acak) ──────────────
-    if (PROXY_URLS.length > 0) {
-      const shuffled = [...PROXY_URLS].sort(() => Math.random() - 0.5);
-      let lastError: Error | null = null;
-
-      for (const proxyUrl of shuffled) {
-        const via = (() => {
-          try {
-            return new URL(proxyUrl).hostname;
-          } catch {
-            return proxyUrl;
-          }
-        })();
-        const tS = Date.now();
-        console.log(
-          `[scraper] ${BADGE["Proxy"]} │ START  │          │ ${shortUrl(directUrl)} via ${via}`,
-        );
-        try {
-          response = await fetchViaProxy(proxyUrl, directUrl);
-          logInfo(
-            "Proxy",
-            `OK ${response.status}`,
-            Date.now() - tS,
-            directUrl,
-            `via ${via}`,
-          );
-          return { text: await response.text(), strategy: "Proxy", via };
-        } catch (err) {
-          lastError = err instanceof Error ? err : new Error(String(err));
-          logWarn(
-            "Proxy",
-            Date.now() - tS,
-            directUrl,
-            `via ${via}: ${lastError.message}`,
-          );
-        }
-      }
-
-      throw lastError ?? new Error(`All proxies failed for ${directUrl}`);
-    }
-
-    // ── Strategy 3: Direct (hanya dev / lokal) ─────────────────────────────
-    const tS = Date.now();
-    console.log(
-      `[scraper] ${BADGE["Direct"]} │ START  │          │ ${shortUrl(directUrl)}`,
+    throw new Error(
+      `All scraping strategies in queue (${SCRAPER_STRATEGY_QUEUE.join(", ")}) failed for ${directUrl}`,
     );
-    response = await fetch(directUrl, {
-      method: "GET",
-      headers: defaultHeaders,
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      logWarn("Direct", Date.now() - tS, directUrl, `HTTP ${response.status}`);
-      throw new Error(
-        `Direct fetch failed with status ${response.status} for ${directUrl}`,
-      );
-    }
-
-    logInfo("Direct", `OK ${response.status}`, Date.now() - tS, directUrl);
-    return { text: await response.text(), strategy: "Direct" };
   })();
 
   inFlightRequests.set(directUrl, fetchPromise);
@@ -340,19 +333,7 @@ async function rawFetch(path: string): Promise<Response> {
   try {
     const result = await fetchPromise;
     const elapsed = Date.now() - t0;
-    const via = result.via ? ` via ${result.via}` : "";
-    console.log(
-      `[scraper] ✅ DONE       │ ${`+${elapsed}ms`.padStart(8)} │ ${result.strategy}${via} │ ${shortUrl(directUrl)}`,
-    );
-    pushLog({
-      level: "info",
-      strategy: "DONE",
-      status: "OK",
-      elapsed,
-      path: shortUrl(directUrl),
-      extra: `via ${result.strategy}${result.via ? ` (${result.via})` : ""}`,
-      ts: Date.now(),
-    });
+    logDone(result.strategy, elapsed, directUrl, result.via);
     return new Response(result.text, {
       status: 200,
       headers: { "Content-Type": "application/json" },
@@ -360,31 +341,19 @@ async function rawFetch(path: string): Promise<Response> {
   } catch (err) {
     const elapsed = Date.now() - t0;
     const errMsg = err instanceof Error ? err.message : String(err);
-    console.error(
-      `[scraper] ❌ FAILED     │ ${`+${elapsed}ms`.padStart(8)} │ ${shortUrl(directUrl)} │ ${errMsg}`,
-    );
-    pushLog({
-      level: "error",
-      strategy: "FAILED",
-      status: "FAIL",
-      elapsed,
-      path: shortUrl(directUrl),
-      extra: errMsg,
-      ts: Date.now(),
-    });
+    logError("FAILED", elapsed, directUrl, errMsg);
     throw err;
   } finally {
     inFlightRequests.delete(directUrl);
   }
 }
 
-// ─── Fetch API ───────────────────────────────────────────────────────────────
+// ─── Exported Fetch Functions ────────────────────────────────────────────────
 export async function fetchAPI(path: string) {
   const response = await rawFetch(path);
   return response.json();
 }
 
-// unused function
 export async function fetchPage(path: string) {
   const response = await rawFetch(path);
   const html = await response.text();

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { scrapePopular } from "@/libs/scrapePopular";
-import { err, okWithLogs } from "@/utils/response";
+import { errWithLogs, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { runWithLogs } from "@/libs/scraper";
 
@@ -12,8 +12,9 @@ export async function GET(req: NextRequest) {
     const page = Number.parseInt(searchParams.get("page") || "1", 10) || 1;
 
     if (!category) {
-      return err(
+      return errWithLogs(
         "Missing category parameter. Allowed: best-manhwa, best-manhua, best-manga, anime-adaptations, trending",
+        [],
         400,
       );
     }
@@ -31,6 +32,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e: any) {
     console.error("[/api/popular]", e);
-    return err(e.message || "Failed to fetch popular komik");
+    return errWithLogs(e.message || "Failed to fetch popular komik", e?.logs ?? [], 500);
   }
 }

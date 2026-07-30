@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { err, okWithLogs } from "@/utils/response";
+import { errWithLogs, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeHome } from "@/libs/scrapeHome";
 import { runWithLogs } from "@/libs/scraper";
@@ -13,8 +13,8 @@ export async function GET(req: NextRequest) {
     return okWithLogs(data, logs, {
       headers: { "Cache-Control": cacheHeader(CACHE_TTL.SHORT) },
     });
-  } catch (e) {
+  } catch (e: any) {
     console.error("[/api/home]", e);
-    return err("Failed to fetch home data");
+    return errWithLogs(e.message || "Failed to fetch home data", e?.logs ?? [], 500);
   }
 }

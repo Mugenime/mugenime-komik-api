@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { err, okWithLogs } from "@/utils/response";
+import { errWithLogs, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeAdvanceSearch } from "@/libs/scrapeAdvanceSearch";
 import { runWithLogs } from "@/libs/scraper";
@@ -20,6 +20,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e: any) {
     console.error("[/api/advanceSearch]", e);
-    return err(e.message || "Failed to fetch advance search komik");
+    return errWithLogs(e.message || "Failed to fetch advance search komik", e?.logs ?? [], 500);
   }
 }

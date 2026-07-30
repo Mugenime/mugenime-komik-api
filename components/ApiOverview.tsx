@@ -111,44 +111,61 @@ export const ApiOverview: React.FC<ApiOverviewProps> = ({
             <code className="block mb-4">npm install</code>
 
             <code className="block mb-2 text-emerald-400">
-              # 3. Environment Setup
+              # 3. Environment Setup (.env.local)
             </code>
             <code className="block mb-1 text-zinc-500">
               # Copy .env.example to .env.local
             </code>
-            <code className="block mb-4">cp .env.example .env.local</code>
-
-            <code className="block mb-2 text-emerald-400">
-              # 4. Cloudflare Worker (Bypass Cloudflare Block)
-            </code>
+            <code className="block mb-2">cp .env.example .env.local</code>
             <code className="block mb-1 text-zinc-500">
-              # If requests fail (403), deploy the proxy:
+              # Configure your proxy & API secrets in .env.local:
             </code>
-            <code className="block mb-1 text-zinc-500">
-              # 1. Open Cloudflare Dashboard &gt; Workers & Pages
+            <code className="block text-zinc-400">
+              MANGA_BASE_URL=https://be.komikcast.cc/
             </code>
-            <code className="block mb-1 text-zinc-500">
-              # 2. Create a new Worker
+            <code className="block text-zinc-400">
+              WEBSHARE_PROXY_1=http://user:pass@ip:port
             </code>
-            <code className="block mb-1 text-zinc-500">
-              # 3. Copy contents from{" "}
-              <span className="text-zinc-300 bg-zinc-800 px-1 rounded">
-                cloudflare-worker/worker.js
-              </span>
+            <code className="block text-zinc-400">
+              SCRAPER_PROXY_URL_1=https://your-worker.workers.dev
             </code>
-            <code className="block mb-1 text-zinc-500">
-              # 4. Paste into the worker editor and deploy
+            <code className="block text-zinc-400">
+              SCRAPER_API_KEY=your_scraperapi_key
             </code>
-            <code className="block mb-4 text-zinc-500">
-              # 5. Set SCRAPER_PROXY_URL in .env.local to your worker URL
+            <code className="block mb-4 text-zinc-400">
+              BYPASS_SECRET=your_bypass_secret
             </code>
 
             <code className="block mb-2 text-emerald-400">
-              # 5. Run development server
+              # 4. Configure Scraping Strategy Priorities (libs/scraper.ts)
+            </code>
+            <code className="block mb-1 text-zinc-500">
+              # Re-order SCRAPER_STRATEGY_QUEUE to adjust execution order:
+            </code>
+            <code className="block text-zinc-400">
+              export const SCRAPER_STRATEGY_QUEUE = [
+            </code>
+            <code className="block text-zinc-400">
+              {"  "}&quot;WebshareProxy&quot;, // 1. HTTP Residential Proxies
+            </code>
+            <code className="block text-zinc-400">
+              {"  "}&quot;CustomProxy&quot;,   // 2. Cloudflare / Deno / Netlify Proxies
+            </code>
+            <code className="block text-zinc-400">
+              {"  "}&quot;ScraperAPI&quot;,    // 3. ScraperAPI Fallback
+            </code>
+            <code className="block text-zinc-400">
+              {"  "}&quot;DirectFetch&quot;,   // 4. Local Dev Machine Direct
+            </code>
+            <code className="block mb-4 text-zinc-400">];</code>
+
+            <code className="block mb-2 text-emerald-400">
+              # 5. Run development server & inspect logs
             </code>
             <code className="block">pnpm dev</code>
-            <code className="block text-zinc-500"># or run</code>
-            <code className="block">npm dev</code>
+            <code className="block text-zinc-500">
+              # Open http://localhost:3000/api to test endpoints & inspect live scraper.log
+            </code>
           </pre>
         </div>
       </div>
