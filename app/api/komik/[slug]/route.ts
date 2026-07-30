@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { err, okWithLogs } from "@/utils/response";
+import { errWithLogs, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeDetailKomik } from "@/libs/scrapeDetailKomik";
 import { runWithLogs } from "@/libs/scraper";
@@ -21,6 +21,6 @@ export async function GET(
     });
   } catch (e: any) {
     console.error("[/api/komik/[slug]]", e);
-    return err(e.message || "Failed to fetch komik detail");
+    return errWithLogs(e.message || "Failed to fetch komik detail", e?.logs ?? [], 500);
   }
 }

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { err, okWithLogs } from "@/utils/response";
+import { errWithLogs, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeReadChapter } from "@/libs/scrapeReadChapter";
 import { runWithLogs } from "@/libs/scraper";
@@ -25,6 +25,6 @@ export async function GET(
     });
   } catch (e: any) {
     console.error("[/api/komik/[slug]/[chapterId]]", e);
-    return err(e.message || "Failed to fetch chapter content");
+    return errWithLogs(e.message || "Failed to fetch chapter content", e?.logs ?? [], 500);
   }
 }

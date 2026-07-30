@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { err, okWithLogs } from "@/utils/response";
+import { errWithLogs, okWithLogs } from "@/utils/response";
 import { cacheHeader, CACHE_TTL, withCache } from "@/utils/cache";
 import { scrapeLatest } from "@/libs/scrapeLatest";
 import { runWithLogs } from "@/libs/scraper";
@@ -18,6 +18,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e: any) {
     console.error("[/api/latest]", e);
-    return err(e.message || "Failed to fetch latest komik");
+    return errWithLogs(e.message || "Failed to fetch latest komik", e?.logs ?? [], 500);
   }
 }

@@ -1,4 +1,4 @@
-import { pushLog } from "@/libs/scraper";
+import { pushLog } from "@/libs/scraperLog";
 
 export const CACHE_TTL = {
   /** 10 min */
