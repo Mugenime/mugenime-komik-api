@@ -27,13 +27,32 @@ const PROXY_URLS: string[] = Object.keys(process.env)
     (url): url is string => typeof url === "string" && url.trim().length > 0,
   );
 
-/** URL Webshare HTTP Proxy (http://username:password@ip:port) */
-const WEBSHARE_PROXIES: string[] = Object.keys(process.env)
-  .filter((key) => key.startsWith("WEBSHARE_PROXY"))
-  .map((key) => process.env[key])
-  .filter(
-    (url): url is string => typeof url === "string" && url.trim().length > 0,
-  );
+/** Akun Webshare HTTP Proxy */
+interface WebshareAccount {
+  id: string;
+  auth: string;
+  ips: string[];
+}
+
+const WEBSHARE_ACCOUNTS: WebshareAccount[] = [];
+Object.keys(process.env).forEach((key) => {
+  if (key.startsWith("WEBSHARE_AUTH_")) {
+    const id = key.replace("WEBSHARE_AUTH_", "");
+    const ipsRaw = process.env[`WEBSHARE_IPS_${id}`];
+    const auth = process.env[key];
+
+    if (auth && ipsRaw) {
+      WEBSHARE_ACCOUNTS.push({
+        id,
+        auth,
+        ips: ipsRaw
+          .split(",")
+          .map((ip) => ip.trim())
+          .filter(Boolean),
+      });
+    }
+  }
+});
 
 const defaultHeaders: Record<string, string> = {
   "User-Agent":
@@ -170,46 +189,75 @@ async function runScraperAPI(directUrl: string): Promise<FetchResult | null> {
   }
 }
 
+interface ProxyAttempt {
+  url: string;
+  accountId: string;
+}
+
 async function runWebshareProxy(
   directUrl: string,
 ): Promise<FetchResult | null> {
-  if (WEBSHARE_PROXIES.length === 0) return null;
+  if (WEBSHARE_ACCOUNTS.length === 0) return null;
 
-  const shuffled = [...WEBSHARE_PROXIES].sort(() => Math.random() - 0.5);
-  for (const proxyUrl of shuffled) {
+  const accountPools = WEBSHARE_ACCOUNTS.map((account) => {
+    const proxies: ProxyAttempt[] = account.ips.map((ip) => ({
+      url: `http://${account.auth}@${ip}`,
+      accountId: account.id,
+    }));
+    return proxies.sort(() => Math.random() - 0.5);
+  });
+
+  accountPools.sort(() => Math.random() - 0.5);
+
+  const interleavedProxies: ProxyAttempt[] = [];
+  const maxIps = Math.max(...accountPools.map((pool) => pool.length));
+
+  for (let i = 0; i < maxIps; i++) {
+    for (const pool of accountPools) {
+      if (pool[i]) {
+        interleavedProxies.push(pool[i]);
+      }
+    }
+  }
+
+  // Coba proxy satu per satu
+  for (const proxy of interleavedProxies) {
     const tS = Date.now();
-    const proxyLabel = (() => {
+
+    const ipLabel = (() => {
       try {
-        return new URL(proxyUrl).hostname;
+        return new URL(proxy.url).hostname;
       } catch {
         return "Webshare";
       }
     })();
-    logStart("Proxy", directUrl, `Webshare (${proxyLabel})`);
+
+    const logLabel = `Webshare Akun ${proxy.accountId} (${ipLabel})`;
+
+    logStart("Proxy", directUrl, logLabel);
+
     try {
-      const response = await fetchViaWebshareProxy(proxyUrl, directUrl);
+      const response = await fetchViaWebshareProxy(proxy.url, directUrl);
+
       logInfo(
         "Proxy",
         `OK ${response.status}`,
         Date.now() - tS,
         directUrl,
-        `via Webshare (${proxyLabel})`,
+        `via ${logLabel}`,
       );
+
       return {
         text: await response.text(),
         strategy: "Proxy",
-        via: `Webshare (${proxyLabel})`,
+        via: logLabel,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logWarn(
-        "Proxy",
-        Date.now() - tS,
-        directUrl,
-        `via Webshare (${proxyLabel}): ${msg}`,
-      );
+      logWarn("Proxy", Date.now() - tS, directUrl, `via ${logLabel}: ${msg}`);
     }
   }
+
   return null;
 }
 
