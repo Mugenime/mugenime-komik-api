@@ -8,38 +8,40 @@ import {
 export async function scrapeAdvanceSearch(
   searchParams: URLSearchParams,
 ): Promise<PaginatedResponse<FilterKomik>> {
-  // Transformation for search
-  const search = searchParams.get("search");
+  const params = new URLSearchParams(searchParams.toString());
+
+  // Transformation for search / title / q
+  const search = params.get("search") || params.get("title") || params.get("q");
   if (search) {
-    const filterStr = `title=like="${search}",nativeTitle=like="${search}"`;
-    searchParams.set("filter", filterStr);
-    searchParams.delete("search");
+    params.set("title", search);
+    params.delete("search");
+    params.delete("q");
   }
 
-  // Transformation for genreIds, status, format (comma-separated string to multiple params)
-  const arrayParams = ["genreIds", "status", "format"];
+  // Transformation for genreIds, status, format, type
+  const arrayParams = ["genreIds", "status", "format", "type"];
   arrayParams.forEach((key) => {
-    const vals = searchParams.getAll(key);
+    const vals = params.getAll(key);
     if (vals.length > 0) {
-      searchParams.delete(key);
+      params.delete(key);
       vals.forEach((val) => {
         val.split(",").forEach((v) => {
-          if (v.trim()) searchParams.append(key, v.trim());
+          const trimmed = v.trim();
+          if (trimmed) params.append(key, trimmed);
         });
       });
     }
   });
 
   // Add default parameters if not provided
-  if (!searchParams.has("takeChapter")) searchParams.set("takeChapter", "3");
-  if (!searchParams.has("includeMeta"))
-    searchParams.set("includeMeta", "false");
-  if (!searchParams.has("sort")) searchParams.set("sort", "latest");
-  if (!searchParams.has("sortOrder")) searchParams.set("sortOrder", "desc");
-  if (!searchParams.has("take")) searchParams.set("take", "12");
-  if (!searchParams.has("page")) searchParams.set("page", "1");
+  if (!params.has("takeChapter")) params.set("takeChapter", "1");
+  if (!params.has("includeMeta")) params.set("includeMeta", "true");
+  if (!params.has("sort")) params.set("sort", "latest");
+  if (!params.has("sortOrder")) params.set("sortOrder", "desc");
+  if (!params.has("take")) params.set("take", "12");
+  if (!params.has("page")) params.set("page", "1");
 
-  const queryParams = searchParams.toString();
+  const queryParams = params.toString();
   const res: KomikcastFilterResponse = await fetchAPI(`/series?${queryParams}`);
 
   if (!res.data || !Array.isArray(res.data)) {
